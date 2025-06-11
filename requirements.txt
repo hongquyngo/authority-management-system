@@ -1,0 +1,10 @@
+streamlit
+pandas
+plotly
+pymysql
+sqlalchemy
+cryptography
+python-dotenv
+xlsxwriter
+openpyxl
+bcrypt
