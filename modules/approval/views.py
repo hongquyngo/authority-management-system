@@ -4,375 +4,633 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from .services import ApprovalAuthorityService
-from shared.components import (
-    render_status_badge, 
-    render_action_buttons,
-    render_date_input,
-    show_success_message,
-    show_error_message,
-    show_warning_message,
-    confirm_dialog
-)
 import logging
 
 logger = logging.getLogger(__name__)
 
 class ApprovalAuthorityView:
-    """View layer for approval authorities"""
+    """View layer for approval authorities management"""
     
     def __init__(self):
         self.service = ApprovalAuthorityService()
-        self.init_session_state()
+        self._init_session_state()
     
-    def init_session_state(self):
+    def _init_session_state(self):
         """Initialize session state variables"""
-        if 'edit_mode' not in st.session_state:
-            st.session_state.edit_mode = False
-        if 'edit_id' not in st.session_state:
-            st.session_state.edit_id = None
-        if 'show_add_form' not in st.session_state:
-            st.session_state.show_add_form = False
-        if 'filters' not in st.session_state:
-            st.session_state.filters = {}
+        defaults = {
+            'show_form': False,
+            'edit_mode': False,
+            'edit_id': None,
+            'filters': {},
+            'page': 0,
+            'page_size': 20,
+            'delete_confirmations': {}
+        }
+        for key, value in defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
     
     def render(self):
         """Main render method"""
         st.title("👥 Approval Authorities Management")
         
-        # Action buttons
+        # Top action bar
+        self._render_action_bar()
+        
+        # Show form or list based on state
+        if st.session_state.show_form:
+            self._render_form()
+        else:
+            self._render_list_view()
+    
+    def _render_action_bar(self):
+        """Render top action buttons"""
         col1, col2, col3, col4 = st.columns([1, 1, 1, 5])
+        
         with col1:
             if st.button("➕ Add New", type="primary", use_container_width=True):
-                st.session_state.show_add_form = True
+                st.session_state.show_form = True
                 st.session_state.edit_mode = False
                 st.session_state.edit_id = None
+                st.rerun()
         
         with col2:
             if st.button("🔄 Refresh", use_container_width=True):
+                # Clear pagination
+                st.session_state.page = 0
                 st.rerun()
         
         st.markdown("---")
-        
-        # Show add/edit form if needed
-        if st.session_state.show_add_form or st.session_state.edit_mode:
-            self.render_form()
-        else:
-            # Show list view
-            self.render_list_view()
     
-    def render_list_view(self):
-        """Render list view with filters"""
-        # Filters section
+    def _render_list_view(self):
+        """Render the list view with filters and data table"""
+        # Filters
         with st.expander("🔍 Search Filters", expanded=True):
-            self.render_filters()
+            self._render_filters()
         
-        # Get filtered data
-        authorities = self.service.get_authorities(st.session_state.filters)
+        # Get data with pagination
+        offset = st.session_state.page * st.session_state.page_size
+        authorities = self.service.get_authorities(
+            st.session_state.filters, 
+            limit=st.session_state.page_size + 1,  # Get one extra to check if there's next page
+            offset=offset
+        )
+        
+        # Check if there's a next page
+        has_next = len(authorities) > st.session_state.page_size
+        if has_next:
+            authorities = authorities[:-1]  # Remove the extra item
         
         if authorities:
-            # Summary stats
-            self.render_summary_stats(authorities)
+            # Summary metrics
+            self._render_summary_metrics(authorities)
             
-            # Data table
-            st.subheader(f"Found {len(authorities)} authorities")
-            self.render_data_table(authorities)
+            # Data table with pagination
+            st.subheader(f"Authorities (Page {st.session_state.page + 1})")
+            self._render_data_table(authorities)
+            
+            # Pagination controls
+            self._render_pagination(has_next)
         else:
-            st.info("No authorities found matching the filters.")
+            if st.session_state.page > 0:
+                # Go back to first page if current page has no data
+                st.session_state.page = 0
+                st.rerun()
+            else:
+                st.info("No authorities found. Click 'Add New' to create one.")
     
-    def render_filters(self):
+    def _render_pagination(self, has_next: bool):
+        """Render pagination controls"""
+        col1, col2, col3 = st.columns([1, 3, 1])
+        
+        with col1:
+            if st.button("⬅️ Previous", disabled=st.session_state.page == 0):
+                st.session_state.page -= 1
+                st.rerun()
+        
+        with col2:
+            st.markdown(f"<center>Page {st.session_state.page + 1}</center>", unsafe_allow_html=True)
+        
+        with col3:
+            if st.button("Next ➡️", disabled=not has_next):
+                st.session_state.page += 1
+                st.rerun()
+    
+    def _render_filters(self):
         """Render filter controls"""
         col1, col2, col3, col4 = st.columns(4)
         
+        # Employee filter
         with col1:
             employees = self.service.get_employees()
-            employee_options = {0: "All Employees"}
-            employee_options.update({emp['id']: emp['display_name'] for emp in employees})
+            employee_options = {"": "All Employees"}
+            employee_options.update({
+                str(emp['id']): f"{emp['full_name']} ({emp['email']})"
+                for emp in employees
+            })
             
-            selected_employee = st.selectbox(
+            current_value = str(st.session_state.filters.get('employee_id', ''))
+            selected = st.selectbox(
                 "Employee",
                 options=list(employee_options.keys()),
-                format_func=lambda x: employee_options[x],
-                key="filter_employee"
+                index=list(employee_options.keys()).index(current_value) if current_value in employee_options else 0,
+                format_func=lambda x: employee_options[x]
             )
-            if selected_employee > 0:
-                st.session_state.filters['employee_id'] = selected_employee
-            elif 'employee_id' in st.session_state.filters:
-                del st.session_state.filters['employee_id']
+            
+            if selected:
+                st.session_state.filters['employee_id'] = int(selected)
+            else:
+                st.session_state.filters.pop('employee_id', None)
         
+        # Approval Type filter
         with col2:
             types = self.service.get_approval_types()
-            type_options = {0: "All Types"}
-            type_options.update({t['id']: t['name'] for t in types})
+            type_options = {"": "All Types"}
+            type_options.update({
+                str(t['id']): t['name'] for t in types
+            })
             
-            selected_type = st.selectbox(
+            current_value = str(st.session_state.filters.get('approval_type_id', ''))
+            selected = st.selectbox(
                 "Approval Type",
                 options=list(type_options.keys()),
-                format_func=lambda x: type_options[x],
-                key="filter_type"
+                index=list(type_options.keys()).index(current_value) if current_value in type_options else 0,
+                format_func=lambda x: type_options[x]
             )
-            if selected_type > 0:
-                st.session_state.filters['approval_type_id'] = selected_type
-            elif 'approval_type_id' in st.session_state.filters:
-                del st.session_state.filters['approval_type_id']
+            
+            if selected:
+                st.session_state.filters['approval_type_id'] = int(selected)
+            else:
+                st.session_state.filters.pop('approval_type_id', None)
         
+        # Company filter
         with col3:
             companies = self.service.get_companies()
-            company_options = {0: "All Companies"}
-            company_options.update({c['id']: f"{c['company_code']} - {c['english_name']}" for c in companies})
+            company_options = {"": "All Companies"}
+            company_options.update({
+                str(c['id']): f"{c['company_code']} - {c['english_name']}"
+                for c in companies
+            })
             
-            selected_company = st.selectbox(
+            current_value = str(st.session_state.filters.get('company_id', ''))
+            selected = st.selectbox(
                 "Company",
                 options=list(company_options.keys()),
-                format_func=lambda x: company_options[x],
-                key="filter_company"
+                index=list(company_options.keys()).index(current_value) if current_value in company_options else 0,
+                format_func=lambda x: company_options[x]
             )
-            if selected_company > 0:
-                st.session_state.filters['company_id'] = selected_company
-            elif 'company_id' in st.session_state.filters:
-                del st.session_state.filters['company_id']
+            
+            if selected:
+                st.session_state.filters['company_id'] = int(selected)
+            else:
+                st.session_state.filters.pop('company_id', None)
         
+        # Status filter
         with col4:
-            status_options = ["All", "Active", "Inactive", "Expired", "Expiring Soon"]
-            selected_status = st.selectbox("Status", status_options, key="filter_status")
-            if selected_status != "All":
-                st.session_state.filters['status'] = selected_status
-            elif 'status' in st.session_state.filters:
-                del st.session_state.filters['status']
+            current_status = st.session_state.filters.get('status', 'All')
+            status = st.selectbox(
+                "Status",
+                options=["All", "Active", "Inactive", "Expired", "Expiring Soon"],
+                index=["All", "Active", "Inactive", "Expired", "Expiring Soon"].index(current_status)
+            )
+            
+            if status != "All":
+                st.session_state.filters['status'] = status
+            else:
+                st.session_state.filters.pop('status', None)
+        
+        # Reset page when filters change
+        st.session_state.page = 0
     
-    def render_summary_stats(self, authorities: List[Dict]):
-        """Render summary statistics"""
+    def _render_summary_metrics(self, authorities: List[Dict]):
+        """Render summary statistics for current page"""
         col1, col2, col3, col4 = st.columns(4)
         
-        active_count = len([a for a in authorities if a['status'] == 'Active'])
-        inactive_count = len([a for a in authorities if a['is_active'] == 0])
-        expired_count = len([a for a in authorities if a['status'] == 'Expired'])
-        expiring_count = len([a for a in authorities if a['status'] == 'Expiring Soon'])
+        # Calculate counts for current page
+        active = sum(1 for a in authorities if a['status'] == 'Active')
+        inactive = sum(1 for a in authorities if not a['is_active'])
+        expired = sum(1 for a in authorities if a['status'] == 'Expired')
+        expiring = sum(1 for a in authorities if a['status'] == 'Expiring Soon')
         
         with col1:
-            st.metric("Active", active_count, delta=None)
+            st.metric("Active", active)
         with col2:
-            st.metric("Inactive", inactive_count, delta=None)
+            st.metric("Inactive", inactive)
         with col3:
-            st.metric("Expired", expired_count, delta=None)
+            st.metric("Expired", expired)
         with col4:
-            st.metric("Expiring Soon", expiring_count, delta=None, help="Next 30 days")
+            st.metric("Expiring Soon", expiring, help="Next 30 days")
     
-    def render_data_table(self, authorities: List[Dict]):
-        """Render data table with actions"""
-        # Create DataFrame for display
-        df = pd.DataFrame(authorities)
-        
-        # Group by employee for better display
-        for idx, row in enumerate(authorities):
+    def _render_data_table(self, authorities: List[Dict]):
+        """Render the data table with actions"""
+        for auth in authorities:
             with st.container():
                 col1, col2, col3, col4, col5 = st.columns([3, 2, 2, 1.5, 1.5])
                 
+                # Employee info
                 with col1:
-                    st.markdown(f"**{row['employee_name']}**")
-                    st.caption(row['email'])
+                    st.markdown(f"**{auth['employee_name']}**")
+                    st.caption(auth['email'])
                 
+                # Approval type
                 with col2:
-                    st.markdown(f"**{row['approval_type_name']}**")
-                    if row['approval_type_code'] == 'PO_SUGGESTION' and row['max_amount']:
-                        st.caption(f"Max: ${row['max_amount']:,.0f}")
+                    st.markdown(f"**{auth['approval_type_name']}**")
+                    if auth.get('max_amount'):
+                        st.caption(f"Max: ${auth['max_amount']:,.0f}")
                 
+                # Company
                 with col3:
-                    if row['company_name']:
-                        st.write(row['company_name'])
+                    if auth['company_name']:
+                        st.write(auth['company_name'])
                     else:
                         st.write("🌍 All Companies")
                 
+                # Validity
                 with col4:
-                    # Validity period
-                    valid_from = row['valid_from'].strftime('%Y-%m-%d')
-                    valid_to = row['valid_to'].strftime('%Y-%m-%d') if row['valid_to'] else 'No Expiry'
-                    st.caption(f"{valid_from}")
-                    st.caption(f"to {valid_to}")
+                    valid_from = auth['valid_from'].strftime('%Y-%m-%d')
+                    valid_to = auth['valid_to'].strftime('%Y-%m-%d') if auth['valid_to'] else 'No Expiry'
+                    st.caption(f"From: {valid_from}")
+                    st.caption(f"To: {valid_to}")
                 
+                # Status & Actions
                 with col5:
-                    # Status and actions
-                    status = row['status']
-                    if status == 'Active':
-                        st.success(status)
-                    elif status == 'Inactive':
-                        st.error(status)
-                    elif status == 'Expired':
-                        st.error(status)
-                    elif status == 'Expiring Soon':
-                        st.warning(status)
+                    # Status badge
+                    self._render_status_badge(auth['status'])
                     
                     # Action buttons
-                    action_col1, action_col2, action_col3 = st.columns(3)
+                    cols = st.columns(3)
                     
-                    with action_col1:
-                        if st.button("✏️", key=f"edit_{row['id']}", help="Edit"):
-                            st.session_state.edit_mode = True
-                            st.session_state.edit_id = row['id']
-                            st.session_state.show_add_form = False
-                            st.rerun()
+                    # Edit button
+                    if cols[0].button("✏️", key=f"edit_{auth['id']}", help="Edit"):
+                        st.session_state.show_form = True
+                        st.session_state.edit_mode = True
+                        st.session_state.edit_id = auth['id']
+                        st.rerun()
                     
-                    with action_col2:
-                        if row['is_active']:
-                            if st.button("🚫", key=f"deact_{row['id']}", help="Deactivate"):
-                                success, message = self.service.toggle_authority_status(row['id'], False)
-                                if success:
-                                    show_success_message(message)
-                                    st.rerun()
-                                else:
-                                    show_error_message(message)
-                        else:
-                            if st.button("✅", key=f"act_{row['id']}", help="Activate"):
-                                success, message = self.service.toggle_authority_status(row['id'], True)
-                                if success:
-                                    show_success_message(message)
-                                    st.rerun()
-                                else:
-                                    show_error_message(message)
+                    # Toggle active/inactive
+                    if auth['is_active']:
+                        if cols[1].button("🚫", key=f"deact_{auth['id']}", help="Deactivate"):
+                            self._toggle_status(auth['id'], False)
+                    else:
+                        if cols[1].button("✅", key=f"act_{auth['id']}", help="Activate"):
+                            self._toggle_status(auth['id'], True)
                     
-                    with action_col3:
-                        if st.button("🗑️", key=f"del_{row['id']}", help="Delete"):
-                            if confirm_dialog(f"delete_{row['id']}"):
-                                success, message = self.service.delete_authority(row['id'])
-                                if success:
-                                    show_success_message(message)
-                                    st.rerun()
-                                else:
-                                    show_error_message(message)
+                    # Delete button with better confirmation
+                    if cols[2].button("🗑️", key=f"del_{auth['id']}", help="Delete"):
+                        st.session_state.delete_confirmations[auth['id']] = True
+                        st.rerun()
                 
-                # Notes if any
-                if row.get('notes'):
-                    st.caption(f"📝 Notes: {row['notes']}")
+                # Show delete confirmation if needed
+                if st.session_state.delete_confirmations.get(auth['id']):
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.warning("⚠️ Are you sure you want to delete this authority?")
+                    with col2:
+                        if st.button("Confirm", key=f"confirm_del_{auth['id']}", type="primary"):
+                            self._delete_authority(auth['id'])
+                            del st.session_state.delete_confirmations[auth['id']]
+                        if st.button("Cancel", key=f"cancel_del_{auth['id']}"):
+                            del st.session_state.delete_confirmations[auth['id']]
+                            st.rerun()
+                
+                # Notes
+                if auth.get('notes'):
+                    st.caption(f"📝 {auth['notes']}")
                 
                 st.markdown("---")
     
-    def render_form(self):
-        """Render add/edit form"""
+    def _render_form(self):
+        """Render the add/edit form"""
+        # Form header
         if st.session_state.edit_mode:
             st.subheader("✏️ Edit Authority")
+            # Load existing data
             authority = self.service.get_authority_by_id(st.session_state.edit_id)
             if not authority:
-                show_error_message("Authority not found")
-                st.session_state.edit_mode = False
-                st.session_state.edit_id = None
-                st.rerun()
+                st.error("Authority not found")
+                self._close_form()
+                return
         else:
             st.subheader("➕ Add New Authority")
             authority = None
         
-        with st.form("authority_form"):
+        # Form
+        with st.form("authority_form", clear_on_submit=False):
+            # Employee selection
+            st.markdown("#### 1️⃣ Select Employee")
+            employees = self.service.get_employees()
+            if not employees:
+                st.error("No employees found in the system")
+                st.form_submit_button("Cancel")
+                self._close_form()
+                return
+                
+            employee_map = {
+                emp['id']: f"{emp['full_name']} ({emp['email']})"
+                for emp in employees
+            }
+            
+            default_emp = authority['employee_id'] if authority else list(employee_map.keys())[0]
+            employee_id = st.selectbox(
+                "Employee *",
+                options=list(employee_map.keys()),
+                format_func=lambda x: employee_map[x],
+                index=list(employee_map.keys()).index(default_emp) if default_emp in employee_map else 0
+            )
+            
+            # Approval Type selection
+            st.markdown("#### 2️⃣ Select Approval Type(s)")
+            types = self.service.get_approval_types()
+            if not types:
+                st.error("No approval types found in the system")
+                st.form_submit_button("Cancel")
+                self._close_form()
+                return
+                
+            type_map = {t['id']: f"{t['name']} ({t['code']})" for t in types}
+            
+            if st.session_state.edit_mode:
+                # Single select for edit mode
+                default_type = authority['approval_type_id'] if authority else list(type_map.keys())[0]
+                type_id = st.selectbox(
+                    "Approval Type *",
+                    options=list(type_map.keys()),
+                    format_func=lambda x: type_map[x],
+                    index=list(type_map.keys()).index(default_type) if default_type in type_map else 0
+                )
+                selected_types = [type_id]
+            else:
+                # Multi-select for create mode
+                selected_types = st.multiselect(
+                    "Approval Types *",
+                    options=list(type_map.keys()),
+                    format_func=lambda x: type_map[x],
+                    help="Select one or more approval types"
+                )
+            
+            # Company selection
+            st.markdown("#### 3️⃣ Select Company(ies)")
+            companies = self.service.get_companies()
+            
+            # Add "All Companies" option
+            company_map = {0: "🌍 All Companies"}
+            if companies:
+                for c in companies:
+                    company_map[c['id']] = f"{c['company_code']} - {c['english_name']}"
+            
+            if st.session_state.edit_mode:
+                # Single select for edit mode
+                default_comp = authority.get('company_id', 0) if authority else 0
+                company_id = st.selectbox(
+                    "Company",
+                    options=list(company_map.keys()),
+                    format_func=lambda x: company_map[x],
+                    index=list(company_map.keys()).index(default_comp or 0)
+                )
+                selected_companies = [None if company_id == 0 else company_id]
+            else:
+                # Multi-select for create mode
+                selected_company_ids = st.multiselect(
+                    "Companies",
+                    options=list(company_map.keys()),
+                    format_func=lambda x: company_map[x],
+                    help="Select companies or leave empty for ALL companies",
+                    default=[]
+                )
+                
+                # If nothing selected or "All Companies" (0) is selected, means all companies
+                if not selected_company_ids or 0 in selected_company_ids:
+                    selected_companies = [None]
+                    # st.info("✅ Will grant authority for ALL companies")
+                else:
+                    selected_companies = selected_company_ids
+                    st.success(f"✅ Selected {len(selected_companies)} specific companies")
+            
+            # Validity period
+            st.markdown("#### 4️⃣ Set Validity Period")
             col1, col2 = st.columns(2)
             
             with col1:
-                # Employee selection
-                employees = self.service.get_employees()
-                employee_options = {emp['id']: emp['display_name'] for emp in employees}
-                
-                employee_id = st.selectbox(
-                    "Employee *",
-                    options=list(employee_options.keys()),
-                    format_func=lambda x: employee_options[x],
-                    index=list(employee_options.keys()).index(authority['employee_id']) if authority else 0
-                )
-                
-                # Approval type selection
-                types = self.service.get_approval_types()
-                type_options = {t['id']: f"{t['name']} ({t['code']})" for t in types}
-                
-                approval_type_id = st.selectbox(
-                    "Approval Type *",
-                    options=list(type_options.keys()),
-                    format_func=lambda x: type_options[x],
-                    index=list(type_options.keys()).index(authority['approval_type_id']) if authority else 0
-                )
-                
-                # Get selected type code for validation
-                selected_type = next((t for t in types if t['id'] == approval_type_id), None)
-                approval_type_code = selected_type['code'] if selected_type else None
-                
-                # Company selection
-                companies = self.service.get_companies()
-                company_options = {0: "🌍 All Companies"}
-                company_options.update({c['id']: f"{c['company_code']} - {c['english_name']}" for c in companies})
-                
-                company_id = st.selectbox(
-                    "Company",
-                    options=list(company_options.keys()),
-                    format_func=lambda x: company_options[x],
-                    index=list(company_options.keys()).index(authority['company_id'] or 0) if authority else 0
-                )
-            
-            with col2:
-                # Valid from date
                 default_from = authority['valid_from'] if authority else datetime.now().date()
                 valid_from = st.date_input("Valid From *", value=default_from)
-                
-                # Valid to date
-                default_to = authority['valid_to'] if authority else None
-                valid_to = st.date_input("Valid To (Optional)", value=default_to)
-                
-                # Max amount for PO approvals
-                if approval_type_code == 'PO_SUGGESTION':
-                    default_amount = float(authority['max_amount']) if authority and authority.get('max_amount') else 0.0
-                    max_amount = st.number_input(
-                        "Maximum Amount ($) *",
-                        min_value=0.0,
-                        value=default_amount,
-                        step=1000.0,
-                        help="Maximum amount this person can approve for PO"
-                    )
-                else:
-                    max_amount = None
+            
+            with col2:
+                default_to = authority['valid_to'] if authority else (datetime.now().date() + timedelta(days=365))
+                valid_to = st.date_input("Valid To", value=default_to)
+            
+            # Max amount (conditional)
+            selected_type_codes = [t['code'] for t in types if t['id'] in selected_types]
+            requires_amount = any(code in ['PO_SUGGESTION', 'PO_CANCELLATION', 'OC_CANCELLATION', 'OC_RETURN'] 
+                                for code in selected_type_codes)
+            
+            if requires_amount:
+                st.markdown("#### 5️⃣ Set Amount Limit")
+                default_amount = authority.get('max_amount', 10000.0) if authority else 10000.0
+                max_amount = st.number_input(
+                    "Maximum Amount ($) *",
+                    min_value=0.0,
+                    max_value=999999999.0,
+                    value=float(default_amount),
+                    step=1000.0
+                )
+            else:
+                max_amount = None
             
             # Notes
-            notes = st.text_area(
-                "Notes",
-                value=authority.get('notes', '') if authority else '',
-                help="Additional notes or comments"
-            )
+            st.markdown("#### 6️⃣ Additional Notes")
+            default_notes = authority.get('notes', '') if authority else ''
+            notes = st.text_area("Notes (Optional)", value=default_notes, max_chars=500)
+            
+            # Summary for create mode
+            if not st.session_state.edit_mode and selected_types:
+                st.markdown("---")
+                st.markdown("### 📊 Summary")
+                
+                # Calculate total authorities to create
+                total = len(selected_types) * len(selected_companies)
+                st.info(f"""
+                **Total Authorities to Create:** {total}
+                - Employee: {employee_map[employee_id]}
+                - Approval Types: {len(selected_types)}
+                - Companies: {len(selected_companies)} {'(All)' if selected_companies == [None] else ''}
+                """)
             
             # Form buttons
+            st.markdown("---")
             col1, col2, col3 = st.columns([1, 1, 4])
+            
             with col1:
                 submitted = st.form_submit_button(
-                    "Update" if st.session_state.edit_mode else "Add",
+                    "Save" if st.session_state.edit_mode else "Create",
                     type="primary",
                     use_container_width=True
                 )
+            
             with col2:
                 cancelled = st.form_submit_button("Cancel", use_container_width=True)
             
+            # Process form submission
             if submitted:
-                # Prepare data
+                # Validation
+                if not selected_types:
+                    st.error("Please select at least one approval type")
+                    return
+                
+                if st.session_state.edit_mode:
+                    # Single update
+                    self._process_single_save(
+                        st.session_state.edit_id,
+                        employee_id,
+                        selected_types[0],
+                        selected_companies[0],
+                        valid_from,
+                        valid_to,
+                        max_amount,
+                        notes
+                    )
+                else:
+                    # Batch create
+                    self._process_batch_create(
+                        employee_id,
+                        selected_types,
+                        selected_companies,
+                        valid_from,
+                        valid_to,
+                        max_amount,
+                        notes
+                    )
+            
+            if cancelled:
+                self._close_form()
+    
+    def _render_status_badge(self, status: str):
+        """Render status badge with appropriate color"""
+        if status == 'Active':
+            st.success(status)
+        elif status in ['Inactive', 'Expired']:
+            st.error(status)
+        elif status == 'Expiring Soon':
+            st.warning(status)
+        else:
+            st.info(status)
+    
+    def _toggle_status(self, authority_id: int, activate: bool):
+        """Toggle authority active status"""
+        success, message = self.service.toggle_authority_status(authority_id, activate)
+        if success:
+            st.success(message)
+            st.rerun()
+        else:
+            st.error(message)
+    
+    def _delete_authority(self, authority_id: int):
+        """Delete authority"""
+        success, message = self.service.delete_authority(authority_id)
+        if success:
+            st.success(message)
+            st.rerun()
+        else:
+            st.error(message)
+    
+    def _process_single_save(self, authority_id, employee_id, type_id, company_id, 
+                           valid_from, valid_to, max_amount, notes):
+        """Process single authority save (create or update)"""
+        # Get type info for validation
+        types = self.service.get_approval_types()
+        type_info = next((t for t in types if t['id'] == type_id), None)
+        
+        data = {
+            'employee_id': employee_id,
+            'approval_type_id': type_id,
+            'approval_type_code': type_info['code'] if type_info else None,
+            'company_id': company_id,
+            'valid_from': valid_from,
+            'valid_to': valid_to,
+            'max_amount': max_amount,
+            'notes': notes.strip()
+        }
+        
+        if authority_id:
+            # Update
+            success, message = self.service.update_authority(authority_id, data)
+        else:
+            # Create
+            success, message = self.service.add_authority(data)
+        
+        if success:
+            st.success(message)
+            self._close_form()
+        else:
+            st.error(message)
+    
+    def _process_batch_create(self, employee_id, type_ids, company_ids, 
+                            valid_from, valid_to, max_amount, notes):
+        """Process batch creation of authorities"""
+        if not type_ids or not company_ids:
+            st.error("Please select at least one approval type and company")
+            return
+        
+        # Get types info
+        types = self.service.get_approval_types()
+        types_dict = {t['id']: t for t in types}
+        
+        # Progress tracking
+        total = len(type_ids) * len(company_ids)
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        success_count = 0
+        errors = []
+        
+        # Process each combination
+        for i, type_id in enumerate(type_ids):
+            type_info = types_dict.get(type_id, {})
+            
+            for j, company_id in enumerate(company_ids):
+                current = i * len(company_ids) + j + 1
+                progress = current / total
+                progress_bar.progress(progress)
+                
+                status_text.text(f"Processing {current}/{total}...")
+                
                 data = {
                     'employee_id': employee_id,
-                    'approval_type_id': approval_type_id,
-                    'approval_type_code': approval_type_code,
-                    'company_id': company_id if company_id > 0 else None,
+                    'approval_type_id': type_id,
+                    'approval_type_code': type_info.get('code'),
+                    'company_id': company_id,
                     'valid_from': valid_from,
                     'valid_to': valid_to,
-                    'max_amount': max_amount,
+                    'max_amount': max_amount if type_info.get('code') in ['PO_SUGGESTION', 'PO_CANCELLATION', 'OC_CANCELLATION', 'OC_RETURN'] else None,
                     'notes': notes.strip()
                 }
                 
-                # Save
-                if st.session_state.edit_mode:
-                    success, message = self.service.update_authority(st.session_state.edit_id, data)
-                else:
-                    success, message = self.service.add_authority(data)
-                
+                success, message = self.service.add_authority(data)
                 if success:
-                    show_success_message(message)
-                    # Reset form state
-                    st.session_state.show_add_form = False
-                    st.session_state.edit_mode = False
-                    st.session_state.edit_id = None
-                    st.rerun()
+                    success_count += 1
                 else:
-                    show_error_message(message)
-            
-            if cancelled:
-                # Reset form state
-                st.session_state.show_add_form = False
-                st.session_state.edit_mode = False
-                st.session_state.edit_id = None
-                st.rerun()
+                    company_name = "All Companies" if company_id is None else f"Company {company_id}"
+                    errors.append(f"{type_info.get('name', 'Unknown')} - {company_name}: {message}")
+        
+        # Clear progress
+        progress_bar.empty()
+        status_text.empty()
+        
+        # Show results
+        if success_count > 0:
+            st.success(f"✅ Successfully created {success_count} authorities")
+        
+        if errors:
+            with st.expander(f"❌ {len(errors)} errors occurred", expanded=True):
+                for error in errors:
+                    st.error(error)
+        
+        if success_count > 0:
+            self._close_form()
+    
+    def _close_form(self):
+        """Close the form and return to list view"""
+        st.session_state.show_form = False
+        st.session_state.edit_mode = False
+        st.session_state.edit_id = None
+        st.session_state.delete_confirmations = {}
+        st.rerun()

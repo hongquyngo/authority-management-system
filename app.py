@@ -4,6 +4,8 @@ from sqlalchemy import text
 from config.settings import APP_CONFIG
 from config.database import get_db_engine, execute_query
 from modules.approval.views import ApprovalAuthorityView
+from modules.auth.auth_service import AuthService
+from modules.auth.user_views import UserManagementView
 import logging
 
 # Configure logging
@@ -75,88 +77,159 @@ st.markdown("""
 def initialize_session_state():
     """Initialize session state variables"""
     if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = True  # Skip auth for now
+        st.session_state.logged_in = False
     if 'username' not in st.session_state:
-        st.session_state.username = 'admin'
+        st.session_state.username = None
     if 'role' not in st.session_state:
-        st.session_state.role = 'admin'
+        st.session_state.role = None
+
+def simple_auth():
+    """Database authentication form"""
+    st.title(f"{APP_CONFIG['icon']} {APP_CONFIG['title']}")
+    st.markdown("### Please login to continue")
+    
+    # Initialize auth service
+    auth_service = AuthService()
+    
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        col1, col2 = st.columns([1, 4])
+        
+        with col1:
+            submitted = st.form_submit_button("Login", type="primary")
+        
+        if submitted:
+            if not username or not password:
+                st.error("Please enter both username and password")
+            else:
+                # Authenticate with database
+                success, user_info = auth_service.authenticate_user(username, password)
+                
+                if success:
+                    # Store user info in session
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.session_state.user_id = user_info['id']
+                    st.session_state.role = user_info['role']
+                    st.session_state.full_name = user_info['full_name']
+                    st.session_state.email = user_info['email']
+                    st.session_state.employee_id = user_info['employee_id']
+                    
+                    # Get permissions
+                    st.session_state.permissions = auth_service.get_user_permissions(user_info['role'])
+                    
+                    st.success("Login successful!")
+                    st.rerun()
+                else:
+                    if user_info and 'error' in user_info:
+                        st.error(user_info['error'])
+                    else:
+                        st.error("Invalid username or password")
+    
+    # Password reminder for first time setup
+    with st.expander("🔐 First Time Login?"):
+        st.info("""
+        **Default Admin Account:**
+        - Username: `admin`
+        - Password: `Admin@2024#Secure`
+        
+        ⚠️ **Important**: Please change the admin password after first login!
+        """)
+    
+    # Show connection status
+    st.sidebar.markdown("---")
+    st.sidebar.caption("Database Connection Status")
+    success, message = test_database_connection()
+    if success:
+        st.sidebar.success("✅ Connected")
+    else:
+        st.sidebar.error("❌ Disconnected")
 
 def render_sidebar():
     """Render sidebar navigation"""
-    st.sidebar.title(f"{APP_CONFIG['icon']} {APP_CONFIG['title']}")
-    st.sidebar.markdown("---")
-    
-    # Module selection
-    enabled_modules = {k: v for k, v in APP_CONFIG['modules'].items() if v['enabled']}
-    
-    if not enabled_modules:
-        st.sidebar.error("No modules enabled")
-        return None
-    
-    module_names = list(enabled_modules.keys())
-    module_labels = [f"{v['icon']} {v['name']}" for v in enabled_modules.values()]
-    
-    selected_idx = st.sidebar.radio(
-        "Select Module",
-        range(len(module_names)),
-        format_func=lambda x: module_labels[x]
-    )
-    
-    selected_module = module_names[selected_idx]
-    
-    # Module description
-    st.sidebar.info(enabled_modules[selected_module].get('description', ''))
-    
-    # User info
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**User Information**")
-    st.sidebar.info(f"👤 {st.session_state.username}")
-    st.sidebar.caption(f"Role: {st.session_state.role}")
-    
-    # Quick stats
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Quick Stats**")
-    try:
-        # Active authorities count
-        query = """
-        SELECT COUNT(DISTINCT employee_id) as count
-        FROM approval_authorities
-        WHERE is_active = 1 AND delete_flag = 0
-        AND (valid_to IS NULL OR valid_to >= CURDATE())
-        """
-        result = execute_query(query)
-        active_count = result[0]['count'] if result else 0
-        st.sidebar.metric("Active Approvers", active_count)
+    with st.sidebar:
+        st.title(f"{APP_CONFIG['icon']} {APP_CONFIG['title']}")
+        st.markdown("---")
         
-        # Expiring soon count
-        query = """
-        SELECT COUNT(*) as count
-        FROM approval_authorities
-        WHERE is_active = 1 AND delete_flag = 0
-        AND valid_to BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
-        """
-        result = execute_query(query)
-        expiring_count = result[0]['count'] if result else 0
-        if expiring_count > 0:
-            st.sidebar.warning(f"⚠️ {expiring_count} authorities expiring soon")
-    except Exception as e:
-        logger.error(f"Error loading sidebar stats: {e}")
-    
-    # Logout button
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🚪 Logout", use_container_width=True):
-        st.session_state.clear()
-        st.rerun()
+        # Module selection
+        enabled_modules = {k: v for k, v in APP_CONFIG['modules'].items() if v['enabled']}
+        
+        if not enabled_modules:
+            st.error("No modules enabled")
+            return None
+        
+        module_names = list(enabled_modules.keys())
+        module_labels = [f"{v['icon']} {v['name']}" for v in enabled_modules.values()]
+        
+        selected_idx = st.radio(
+            "Select Module",
+            range(len(module_names)),
+            format_func=lambda x: module_labels[x]
+        )
+        
+        selected_module = module_names[selected_idx]
+        
+        # Module description
+        st.info(enabled_modules[selected_module].get('description', ''))
+        
+        # User info
+        st.markdown("---")
+        st.markdown("**User Information**")
+        st.info(f"👤 {st.session_state.get('full_name', st.session_state.username)}")
+        st.caption(f"Role: {st.session_state.role}")
+        st.caption(f"Email: {st.session_state.get('email', 'N/A')}")
+        
+        # Quick stats - with error handling
+        st.markdown("---")
+        st.markdown("**Quick Stats**")
+        try:
+            # Active authorities count
+            query = """
+            SELECT COUNT(DISTINCT employee_id) as count
+            FROM approval_authorities
+            WHERE is_active = 1 AND delete_flag = 0
+            AND (valid_to IS NULL OR valid_to >= CURDATE())
+            """
+            result = execute_query(query)
+            active_count = result[0]['count'] if result else 0
+            st.metric("Active Approvers", active_count)
+            
+            # Expiring soon count
+            query = """
+            SELECT COUNT(*) as count
+            FROM approval_authorities
+            WHERE is_active = 1 AND delete_flag = 0
+            AND valid_to BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+            """
+            result = execute_query(query)
+            expiring_count = result[0]['count'] if result else 0
+            if expiring_count > 0:
+                st.warning(f"⚠️ {expiring_count} authorities expiring soon")
+        except Exception as e:
+            logger.error(f"Error loading sidebar stats: {e}")
+            st.caption("Stats unavailable")
+        
+        # Logout button
+        st.markdown("---")
+        if st.button("🚪 Logout", use_container_width=True):
+            for key in ['logged_in', 'username', 'role']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
     
     return selected_module
 
 def test_database_connection():
     """Test database connection"""
     try:
-        # Simple connection test
-        result = execute_query("SELECT 1 as test", fetch=True)
-        return True, "Database connection successful"
+        result = execute_query("SELECT 1 as test")
+        if result is not None:
+            return True, "Database connection successful"
+        else:
+            return False, "Database query returned no results"
     except Exception as e:
+        logger.error(f"Database connection error: {str(e)}")
         return False, f"Database connection failed: {str(e)}"
 
 def main():
@@ -165,15 +238,17 @@ def main():
     
     # Check authentication
     if not st.session_state.get('logged_in'):
-        st.error("Please login to continue")
-        st.stop()
+        simple_auth()
+        return
     
-    # Test database connection on startup
+    # Test database connection
     success, message = test_database_connection()
     if not success:
         st.error(f"❌ {message}")
         st.info("Please check your database configuration and try again.")
-        st.stop()
+        if st.button("Retry Connection"):
+            st.rerun()
+        return
     
     # Render navigation
     selected_module = render_sidebar()
@@ -184,9 +259,17 @@ def main():
     
     # Route to module
     if selected_module == 'approval':
-        # Use the ApprovalAuthorityView
         view = ApprovalAuthorityView()
         view.render()
+    elif selected_module == 'users':
+        # Check if user has permission
+        permissions = st.session_state.get('permissions', {})
+        if permissions.get('can_manage_users', False):
+            view = UserManagementView()
+            view.render()
+        else:
+            st.error("❌ You don't have permission to access User Management")
+            st.info("Please contact your administrator for access.")
     else:
         # Placeholder for other modules
         st.title(f"{APP_CONFIG['modules'][selected_module]['icon']} {APP_CONFIG['modules'][selected_module]['name']}")

@@ -1,42 +1,27 @@
+# config/settings.py
+
 APP_CONFIG = {
     'title': 'Authority Management System',
-    'icon': '🔐',
     'version': '1.0.0',
+    'icon': '🔐',
     'modules': {
         'approval': {
-            'enabled': True,
             'name': 'Approval Authorities',
             'icon': '👥',
-            'description': 'Manage approval permissions'
+            'enabled': True,
+            'description': 'Manage approval authorities for different types and companies'
         },
-        'data_access': {
+        'users': {
+            'name': 'User Management',
+            'icon': '👤',
+            'enabled': True,
+            'description': 'Manage system users, roles, and permissions'
+        },
+        'visibility': {
+            'name': 'Data Visibility',
+            'icon': '👁️',
             'enabled': False,
-            'name': 'Data Access Control',
-            'icon': '🔍',
-            'description': 'Control data access permissions'
+            'description': 'Control data access and visibility rules'
         }
-    },
-    'theme': {
-        'primary_color': '#FF6B6B',
-        'success_color': '#51CF66',
-        'warning_color': '#FFD93D',
-        'error_color': '#FF6B6B',
-        'info_color': '#4ECDC4'
-    }
-}
-
-# User roles
-USER_ROLES = {
-    'admin': {
-        'name': 'Administrator',
-        'permissions': ['view', 'add', 'edit', 'delete', 'import', 'export', 'settings']
-    },
-    'manager': {
-        'name': 'Manager',
-        'permissions': ['view', 'add', 'edit', 'import', 'export']
-    },
-    'viewer': {
-        'name': 'Viewer',
-        'permissions': ['view', 'export']
     }
 }
