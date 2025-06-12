@@ -127,15 +127,6 @@ def simple_auth():
                     else:
                         st.error("Invalid username or password")
     
-    # Password reminder for first time setup
-    with st.expander("🔐 First Time Login?"):
-        st.info("""
-        **Default Admin Account:**
-        - Username: `admin`
-        - Password: `Admin@2024#Secure`
-        
-        ⚠️ **Important**: Please change the admin password after first login!
-        """)
     
     # Show connection status
     st.sidebar.markdown("---")
