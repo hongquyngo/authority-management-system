@@ -449,30 +449,33 @@ class ApprovalAuthorityView:
                 default_to = authority['valid_to'] if authority else (datetime.now().date() + timedelta(days=365))
                 valid_to = st.date_input("Valid To", value=default_to)
             
-            # Max amount (conditional)
-            selected_type_codes = [t['code'] for t in types if t['id'] in selected_types]
-            requires_amount = any(code in ['PO_SUGGESTION', 'PO_CANCELLATION', 'OC_CANCELLATION', 'OC_RETURN'] 
-                                for code in selected_type_codes)
+            # Max amount - Always show
+            st.markdown("#### 5️⃣ Set Amount Limit")
             
-            if requires_amount:
-                st.markdown("#### 5️⃣ Set Amount Limit")
-                if authority:
-                    # Handle None value from database
-                    default_amount = authority.get('max_amount', 10000.0)
-                    if default_amount is None:
-                        default_amount = 10000.0
-                else:
+            # List of approval types that require amount
+            amount_required_codes = ['PO_SUGGESTION', 'PO_CANCELLATION', 'OC_CANCELLATION', 'OC_RETURN']
+            
+            # Set default value
+            if authority:
+                default_amount = authority.get('max_amount', 10000.0)
+                if default_amount is None:
                     default_amount = 10000.0
-                    
-                max_amount = st.number_input(
-                    "Maximum Amount ($) *",
-                    min_value=0.0,
-                    max_value=999999999.0,
-                    value=float(default_amount),
-                    step=1000.0
-                )
             else:
-                max_amount = None
+                default_amount = 10000.0
+            
+            # Always show the input field
+            max_amount = st.number_input(
+                "Maximum Amount ($)",
+                min_value=0.0,
+                max_value=999999999.0,
+                value=float(default_amount),
+                step=1000.0,
+                help="Required for: PO Suggestion, PO/Order/OC Cancellation, OC Return"
+            )
+            
+            # Info message about which types require amount
+            st.info("💡 Amount limit is **required** for: PO Suggestion, PO Cancellation, Order Cancellation, OC Return")
+            st.caption("💡 Amount limit is **optional** for other approval types")
             
             # Notes
             st.markdown("#### 6️⃣ Additional Notes")
@@ -513,6 +516,25 @@ class ApprovalAuthorityView:
                 if not selected_types:
                     st.error("Please select at least one approval type")
                     return
+                
+                # Check if amount is required
+                amount_required = False
+                amount_required_codes = ['PO_SUGGESTION', 'PO_CANCELLATION', 'OC_CANCELLATION', 'OC_RETURN']
+                
+                for type_id in selected_types:
+                    type_info = next((t for t in types if t['id'] == type_id), None)
+                    if type_info and type_info['code'] in amount_required_codes:
+                        amount_required = True
+                        break
+                
+                # Validate amount if required
+                if amount_required and (max_amount is None or max_amount <= 0):
+                    st.error("Amount limit is required for the selected approval type(s)")
+                    return
+                
+                # Set amount to None if not required
+                if not amount_required:
+                    max_amount = None
                 
                 if st.session_state.edit_mode:
                     # Single update
