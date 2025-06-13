@@ -206,11 +206,28 @@ class ApprovalAuthorityView:
         """Render summary statistics for current page"""
         col1, col2, col3, col4 = st.columns(4)
         
-        # Calculate counts for current page
-        active = sum(1 for a in authorities if a['status'] == 'Active')
-        inactive = sum(1 for a in authorities if not a['is_active'])
-        expired = sum(1 for a in authorities if a['status'] == 'Expired')
-        expiring = sum(1 for a in authorities if a['status'] == 'Expiring Soon')
+        # Calculate counts for current page with bytes handling
+        active = 0
+        inactive = 0
+        expired = 0
+        expiring = 0
+        
+        for a in authorities:
+            # Handle bytes type for is_active
+            is_active_raw = a.get('is_active', 0)
+            if isinstance(is_active_raw, bytes):
+                is_active = int.from_bytes(is_active_raw, byteorder='big')
+            else:
+                is_active = int(is_active_raw) if is_active_raw is not None else 0
+            
+            if a['status'] == 'Active':
+                active += 1
+            elif a['status'] == 'Inactive' or is_active == 0:
+                inactive += 1
+            elif a['status'] == 'Expired':
+                expired += 1
+            elif a['status'] == 'Expiring Soon':
+                expiring += 1
         
         with col1:
             st.metric("Active", active)
@@ -220,6 +237,18 @@ class ApprovalAuthorityView:
             st.metric("Expired", expired)
         with col4:
             st.metric("Expiring Soon", expiring, help="Next 30 days")
+    
+    def _convert_is_active(self, is_active_raw):
+        """Convert is_active from various types to boolean"""
+        if isinstance(is_active_raw, bytes):
+            # Handle bytes type from MySQL
+            return int.from_bytes(is_active_raw, byteorder='big') == 1
+        elif isinstance(is_active_raw, (int, float)):
+            return int(is_active_raw) == 1
+        elif isinstance(is_active_raw, str):
+            return is_active_raw == '1'
+        else:
+            return False
     
     def _render_data_table(self, authorities: List[Dict]):
         """Render the data table with actions"""
@@ -267,15 +296,17 @@ class ApprovalAuthorityView:
                         st.session_state.edit_id = auth['id']
                         st.rerun()
                     
-                    # Toggle active/inactive
-                    if auth['is_active']:
+                    # Toggle active/inactive - with proper bytes handling
+                    is_active = self._convert_is_active(auth.get('is_active', 0))
+                    
+                    if is_active:
                         if cols[1].button("🚫", key=f"deact_{auth['id']}", help="Deactivate"):
                             self._toggle_status(auth['id'], False)
                     else:
                         if cols[1].button("✅", key=f"act_{auth['id']}", help="Activate"):
                             self._toggle_status(auth['id'], True)
                     
-                    # Delete button with better confirmation
+                    # Delete button
                     if cols[2].button("🗑️", key=f"del_{auth['id']}", help="Delete"):
                         st.session_state.delete_confirmations[auth['id']] = True
                         st.rerun()
@@ -401,7 +432,7 @@ class ApprovalAuthorityView:
                 # If nothing selected or "All Companies" (0) is selected, means all companies
                 if not selected_company_ids or 0 in selected_company_ids:
                     selected_companies = [None]
-                    # st.info("✅ Will grant authority for ALL companies")
+                    st.info("✅ Will grant authority for ALL companies")
                 else:
                     selected_companies = selected_company_ids
                     st.success(f"✅ Selected {len(selected_companies)} specific companies")
@@ -425,7 +456,14 @@ class ApprovalAuthorityView:
             
             if requires_amount:
                 st.markdown("#### 5️⃣ Set Amount Limit")
-                default_amount = authority.get('max_amount', 10000.0) if authority else 10000.0
+                if authority:
+                    # Handle None value from database
+                    default_amount = authority.get('max_amount', 10000.0)
+                    if default_amount is None:
+                        default_amount = 10000.0
+                else:
+                    default_amount = 10000.0
+                    
                 max_amount = st.number_input(
                     "Maximum Amount ($) *",
                     min_value=0.0,
