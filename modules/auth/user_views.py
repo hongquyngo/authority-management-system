@@ -266,7 +266,7 @@ class UserManagementView:
             
             with col1:
                 roles = ['admin', 'manager', 'sales', 'supply_chain', 'viewer']
-                current_role = user['role'] if user else 'user'
+                current_role = user['role'] if user else 'viewer'
                 role = st.selectbox(
                     "Role *",
                     options=roles,
