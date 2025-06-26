@@ -432,7 +432,7 @@ class ApprovalAuthorityView:
                 # If nothing selected or "All Companies" (0) is selected, means all companies
                 if not selected_company_ids or 0 in selected_company_ids:
                     selected_companies = [None]
-                    st.info("✅ Will grant authority for ALL companies")
+                    # st.info("✅ Will grant authority for ALL companies")
                 else:
                     selected_companies = selected_company_ids
                     st.success(f"✅ Selected {len(selected_companies)} specific companies")

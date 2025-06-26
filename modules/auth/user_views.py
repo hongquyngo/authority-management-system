@@ -89,7 +89,7 @@ class UserManagementView:
             with col2:
                 role_filter = st.selectbox(
                     "Role",
-                    options=['All', 'admin', 'manager', 'user'],
+                    options=['All', 'admin', 'manager', 'viewer', 'sales', 'supply_chain'],
                     index=0
                 )
                 if role_filter != 'All':
@@ -146,7 +146,7 @@ class UserManagementView:
                 
                 # Role & Employee
                 with col2:
-                    role_emoji = {'admin': '👑', 'manager': '👔', 'user': '👤'}
+                    role_emoji = {'admin': '👑', 'manager': '👔', 'sales': '👤', 'supply_chain': '🚚', 'viewer': '👁️'}
                     st.write(f"{role_emoji.get(user['role'], '👤')} {user['role'].title()}")
                     if user['full_name']:
                         st.caption(f"Employee: {user['full_name']}")
@@ -265,7 +265,7 @@ class UserManagementView:
             col1, col2 = st.columns(2)
             
             with col1:
-                roles = ['user', 'manager', 'admin']
+                roles = ['admin', 'manager', 'sales', 'supply_chain', 'viewer']
                 current_role = user['role'] if user else 'user'
                 role = st.selectbox(
                     "Role *",
